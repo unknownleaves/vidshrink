@@ -1,0 +1,50 @@
+# Publishes an update: push a tag like v1.0.1 and this builds VidShrink.exe and creates
+# a GitHub Release. Installed copies of VidShrink find it and offer to update themselves.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check the tag matches VERSION in vidshrink.py
+        shell: pwsh
+        run: |
+          $v = (Select-String -Path vidshrink.py -Pattern '^VERSION = "([^"]+)"').Matches[0].Groups[1].Value
+          if ("v$v" -ne "${{ github.ref_name }}") {
+            throw "Tag ${{ github.ref_name }} does not match VERSION = `"$v`" in vidshrink.py. Update one so they match."
+          }
+
+      - name: Build VidShrink.exe
+        run: |
+          pip install pyinstaller
+          pyinstaller --noconfirm --onefile --windowed --name VidShrink --icon vidshrink.ico --add-data "vidshrink.ico;." vidshrink.py
+
+      - name: Package release files
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release | Out-Null
+          Copy-Item dist/VidShrink.exe release/
+          git archive --format=zip --prefix=VidShrink/ -o release/VidShrink-source.zip HEAD
+          $sums = Get-ChildItem release -File | ForEach-Object {
+            "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name
+          }
+          $sums | Set-Content release/SHA256SUMS.txt
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true

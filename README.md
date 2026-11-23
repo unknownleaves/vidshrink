@@ -12,13 +12,17 @@ Shrinks videos to a size you choose (for example **1 GB → 500 MB**) while keep
 - Batch queue: add multiple files or a whole folder
 - Optional downscaling (4K → 1080p, etc.) and adjustable audio bitrate
 - Downloads FFmpeg automatically on first run
-- Can be built into a standalone `VidShrink.exe`
+- Updates itself: new versions published here are offered in the app automatically
 
 ## Download
 
-Click **Code → Download ZIP** at the top of this page (or grab a release, if there is one), then unzip it.
+**Easiest:** go to [**Releases**](https://github.com/unknownleaves/vidshrink/releases/latest), download **`VidShrink.exe`**, put it in a folder you own (e.g. Documents\\VidShrink) and run it. No Python needed.
 
-## Quick start
+> Windows SmartScreen may warn about an unrecognised app the first time. Click **More info → Run anyway**.
+
+**From source:** download **`VidShrink-source.zip`** from the same page (or **Code → Download ZIP**), unzip it and follow the quick start below.
+
+## Quick start (source version)
 
 1. Install **Python 3** from https://www.python.org/downloads/ (during setup, tick **"Add python.exe to PATH"**).
 2. Double-click **`Start VidShrink.bat`**.
@@ -26,6 +30,10 @@ Click **Code → Download ZIP** at the top of this page (or grab a release, if t
 4. Click **Add Videos…**, choose **Target size = 500 MB** (or any size), then click **▶ Start**.
 
 The compressed file is saved next to the original as `name_compressed.mp4`. You can also choose a different folder under **Save to**.
+
+## Updates
+
+VidShrink checks this repository for a new release a few seconds after it starts. When there is one, it shows what's new and asks whether to install it. Click **Yes**, and it downloads the update, checks that the file is genuine (SHA-256), installs it and restarts. You can also click **⟳ Check for Updates** at any time.
 
 ## Desktop & Start menu shortcut
 
@@ -58,3 +66,15 @@ The icon source is `vidshrink.svg`. `vidshrink.ico` contains all the Windows siz
 - Output is always `.mp4` with the first video and audio track. Subtitles and extra audio tracks aren't kept.
 - HDR videos are converted to standard (SDR-range 8-bit) output.
 - FFmpeg is stored in `%LOCALAPPDATA%\VidShrink\bin`. To use your own copy instead, put `ffmpeg.exe` and `ffprobe.exe` next to `vidshrink.py` or `VidShrink.exe`, or add them to your PATH.
+
+## Publishing an update (for the maintainer)
+
+1. Make your changes and set the new version at the top of `vidshrink.py`, e.g. `VERSION = "1.0.1"`.
+2. Commit and push, then tag the release with the *same* number:
+   ```
+   git tag v1.0.1
+   git push origin v1.0.1
+   ```
+3. GitHub Actions (`.github/workflows/release.yml`) builds `VidShrink.exe` on Windows, packages `VidShrink-source.zip` and `SHA256SUMS.txt`, and publishes the release with auto-generated notes. You can edit the release text on GitHub afterwards: it's what users see under "What's new".
+
+Everyone running VidShrink is offered the update the next time they open it. The build stops with an error if the tag and `VERSION` don't match. The repository must stay **public** for the update check to work.

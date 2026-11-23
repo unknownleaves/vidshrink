@@ -18,6 +18,8 @@ import subprocess
 import sys
 import tempfile
 import threading
+import hashlib
+import urllib.error
 import urllib.request
 import zipfile
 
@@ -26,7 +28,9 @@ from tkinter import ttk, filedialog, messagebox
 from tkinter.scrolledtext import ScrolledText
 
 APP_NAME = "VidShrink"
-VERSION = "1.0"
+VERSION = "1.0.0"  # bump this, then push a matching tag (v1.0.1) to publish an update
+GITHUB_REPO = "unknownleaves/vidshrink"  # updates are published as GitHub Releases here
+RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 IS_WIN = os.name == "nt"
 EXE = ".exe" if IS_WIN else ""
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # hide console windows on Windows
@@ -270,6 +274,159 @@ def download_ffmpeg(report):
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+# ----------------------------------------------------------------------------
+# Updates (published as GitHub Releases by .github/workflows/release.yml)
+# ----------------------------------------------------------------------------
+
+EXE_ASSET = "VidShrink.exe"
+SOURCE_ASSET = "VidShrink-source.zip"
+CHECKSUM_ASSET = "SHA256SUMS.txt"
+
+# Runs after the .exe has quit: swaps in the new .exe, then restarts it.
+UPDATE_BAT = r"""@echo off
+chcp 65001 >nul
+set n=0
+:retry
+move /y "{new}" "{exe}" >nul 2>nul
+if not errorlevel 1 goto done
+set /a n+=1
+if %n% geq 60 goto end
+ping -n 2 127.0.0.1 >nul
+goto retry
+:done
+start "" "{exe}"
+:end
+del "%~f0"
+"""
+
+
+def parse_version(v):
+    nums = [int(n) for n in re.findall(r"\d+", v or "")[:3]]
+    return tuple(nums + [0] * (3 - len(nums)))
+
+
+def http_get(url, timeout=30):
+    req = urllib.request.Request(url, headers={"User-Agent": f"{APP_NAME}/{VERSION}",
+                                               "Accept": "application/vnd.github+json"})
+    return urllib.request.urlopen(req, timeout=timeout)
+
+
+def fetch_latest_release():
+    """Newest published release: dict(version, tag, notes, url, assets{name: download_url})."""
+    try:
+        with http_get(RELEASES_API, 15) as r:
+            data = json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            raise RuntimeError("No updates have been published yet.") from None
+        if e.code in (403, 429):
+            raise RuntimeError("GitHub is limiting update checks right now. Please try again later.") from None
+        raise RuntimeError(f"GitHub returned an error ({e.code}).") from None
+    except (urllib.error.URLError, OSError) as e:
+        raise RuntimeError(f"Couldn't reach GitHub ({getattr(e, 'reason', e)}).") from None
+    tag = data.get("tag_name") or ""
+    return {
+        "version": tag.lstrip("vV"),
+        "tag": tag,
+        "notes": (data.get("body") or "").strip(),
+        "url": data.get("html_url"),
+        "assets": {a["name"]: a["browser_download_url"] for a in data.get("assets", [])},
+    }
+
+
+def download_file(url, dest, report):
+    with http_get(url, 60) as r, open(dest, "wb") as f:
+        total = int(r.headers.get("Content-Length") or 0)
+        done = 0
+        while True:
+            chunk = r.read(1 << 18)
+            if not chunk:
+                break
+            f.write(chunk)
+            done += len(chunk)
+            report(done, total)
+
+
+def verify_checksum(release, name, path):
+    """Make sure the download is exactly the file the release workflow built."""
+    url = release["assets"].get(CHECKSUM_ASSET)
+    if not url:
+        raise RuntimeError("This release has no checksum file, so it can't be verified.")
+    with http_get(url, 15) as r:
+        sums = r.read().decode("utf-8", "replace")
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    for line in sums.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[-1].lstrip("*") == name:
+            if parts[0].lower() != h.hexdigest():
+                raise RuntimeError("The download was damaged (checksum mismatch). Please try again.")
+            return
+    raise RuntimeError(f"{name} is not listed in the release checksums.")
+
+
+def install_update(release, report):
+    """Download and stage an update. Returns a function that completes it and restarts the app."""
+    tmp = tempfile.mkdtemp(prefix="vidshrink_update_")
+    try:
+        if getattr(sys, "frozen", False):
+            # ---- running as VidShrink.exe: swap the .exe after we exit ----
+            url = release["assets"].get(EXE_ASSET)
+            if not url:
+                raise RuntimeError(f"This release has no {EXE_ASSET} to download.")
+            dl = os.path.join(tmp, EXE_ASSET)
+            download_file(url, dl, report)
+            verify_checksum(release, EXE_ASSET, dl)
+            exe = sys.executable
+            new = exe + ".new"
+            try:
+                shutil.move(dl, new)
+            except OSError as e:
+                raise RuntimeError(f"Can't write to {os.path.dirname(exe)} ({e.strerror}). Move VidShrink.exe "
+                                   "to a folder you can write to (e.g. Documents) and try again.") from None
+            bat = os.path.join(tempfile.gettempdir(), "vidshrink_update.bat")
+            with open(bat, "w", encoding="utf-8", newline="\r\n") as f:
+                f.write(UPDATE_BAT.format(new=new, exe=exe))
+
+            def finish():
+                subprocess.Popen(["cmd", "/c", bat], close_fds=True,
+                                 creationflags=NO_WINDOW | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+            return finish
+
+        # ---- running from source (Start VidShrink.bat): replace the app files ----
+        url = release["assets"].get(SOURCE_ASSET)
+        if not url:
+            raise RuntimeError(f"This release has no {SOURCE_ASSET} to download.")
+        dl = os.path.join(tmp, SOURCE_ASSET)
+        download_file(url, dl, report)
+        verify_checksum(release, SOURCE_ASSET, dl)
+        out = os.path.join(tmp, "src")
+        with zipfile.ZipFile(dl) as z:
+            z.extractall(out)
+        root = next((d for d, _, files in os.walk(out) if "vidshrink.py" in files), None)
+        if not root:
+            raise RuntimeError("The update package is missing vidshrink.py.")
+        dest = app_dir()
+        for name in os.listdir(root):
+            src = os.path.join(root, name)
+            if os.path.isfile(src) and not name.startswith("."):
+                staged = os.path.join(dest, name + ".updating")
+                shutil.copy2(src, staged)
+                os.replace(staged, os.path.join(dest, name))
+
+        def finish():
+            py = sys.executable
+            pyw = os.path.join(os.path.dirname(py), "pythonw.exe")
+            if IS_WIN and os.path.isfile(pyw):
+                py = pyw  # relaunch without a console window
+            subprocess.Popen([py, os.path.join(dest, "vidshrink.py")], cwd=dest, close_fds=True)
+        return finish
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def probe(ffprobe, path):
     res = subprocess.run(
         [ffprobe, "-v", "error", "-print_format", "json", "-show_format", "-show_streams", path],
@@ -506,6 +663,8 @@ class App(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(100, self._poll)
         self.after(400, self._check_ffmpeg)
+        self.updating = False
+        self.after(2500, lambda: self._check_updates(manual=False))
 
     def _set_icon(self):
         try:  # PNG icons work everywhere (title bar, Alt+Tab)
@@ -567,8 +726,12 @@ class App(tk.Tk):
         ttk.Button(bar, text="📁 Add Folder…", command=self._add_folder).pack(side="left", padx=6)
         ttk.Button(bar, text="Remove Selected", command=self._remove_selected).pack(side="left")
         ttk.Button(bar, text="Clear List", command=self._clear).pack(side="left", padx=6)
+        ttk.Label(bar, text=f"v{VERSION}", foreground="#666").pack(side="right")
+        self.update_btn = ttk.Button(bar, text="⟳ Check for Updates",
+                                     command=lambda: self._check_updates(manual=True))
+        self.update_btn.pack(side="right", padx=6)
         ttk.Label(bar, text="Tip: double-click a finished file to show it in Explorer",
-                  foreground="#666").pack(side="right")
+                  foreground="#666").pack(side="right", padx=(0, 6))
 
         # Queue
         qf = ttk.Frame(root)
@@ -916,6 +1079,34 @@ class App(tk.Tk):
                         self.log(f"FFmpeg installed to {tools_dir()}")
                     else:
                         self.status.configure(text="FFmpeg download failed.")
+                elif kind == "update_info":
+                    self._on_update_info(m[1], m[2])
+                elif kind == "update_error":
+                    _, msg, manual = m
+                    self.update_btn.configure(state="normal")
+                    if manual:
+                        messagebox.showinfo(APP_NAME, msg)
+                elif kind == "update_progress":
+                    _, done, total = m
+                    pct = done * 100 / total if total else 0
+                    self.status.configure(text=f"Downloading update… {fmt_size(done)}"
+                                          + (f" / {fmt_size(total)} ({pct:.0f}%)" if total else ""))
+                    self.cur_bar["value"] = pct * 10
+                elif kind == "update_ready":
+                    self.status.configure(text="Update installed – restarting…")
+                    self.update_idletasks()
+                    try:
+                        m[1]()
+                    finally:
+                        self.destroy()
+                    return
+                elif kind == "update_failed":
+                    self.updating = False
+                    self.cur_bar["value"] = 0
+                    self.start_btn.configure(state="normal")
+                    self.update_btn.configure(state="normal")
+                    self.status.configure(text="Update failed.")
+                    messagebox.showerror(APP_NAME, f"The update couldn't be installed:\n\n{m[1]}")
                 elif kind == "dl_failed":
                     self.cur_bar["value"] = 0
                     self.start_btn.configure(state="normal")
@@ -925,6 +1116,54 @@ class App(tk.Tk):
         except queue.Empty:
             pass
         self.after(80, self._poll)
+
+    # ---- updates -------------------------------------------------------
+    def _check_updates(self, manual):
+        if self.updating:
+            return
+        self.update_btn.configure(state="disabled")
+
+        def run():
+            try:
+                self.msgs.put(("update_info", fetch_latest_release(), manual))
+            except Exception as e:  # noqa: BLE001
+                self.msgs.put(("update_error", str(e), manual))
+        threading.Thread(target=run, daemon=True).start()
+
+    def _on_update_info(self, rel, manual):
+        self.update_btn.configure(state="normal")
+        if parse_version(rel["version"]) <= parse_version(VERSION):
+            if manual:
+                messagebox.showinfo(APP_NAME, f"You're up to date (version {VERSION}).")
+            return
+        self.update_btn.configure(text=f"⬆ Update to v{rel['version']}")
+        if self.worker:
+            if manual:
+                messagebox.showinfo(APP_NAME, f"Version {rel['version']} is available. Finish or cancel the "
+                                              "current compression, then click the update button.")
+            return
+        notes = rel["notes"]
+        if len(notes) > 900:
+            notes = notes[:900].rsplit("\n", 1)[0] + "\n…"
+        msg = (f"VidShrink {rel['version']} is available (you have {VERSION}).\n\n"
+               + (f"What's new:\n{notes}\n\n" if notes else "")
+               + "Install it now? VidShrink will restart.")
+        if messagebox.askyesno(f"{APP_NAME} update", msg):
+            self._start_update(rel)
+
+    def _start_update(self, rel):
+        self.updating = True
+        self.start_btn.configure(state="disabled")
+        self.update_btn.configure(state="disabled")
+        self.log(f"Updating to {rel['version']}…")
+
+        def run():
+            try:
+                finish = install_update(rel, lambda d, t: self.msgs.put(("update_progress", d, t)))
+                self.msgs.put(("update_ready", finish))
+            except Exception as e:  # noqa: BLE001
+                self.msgs.put(("update_failed", str(e)))
+        threading.Thread(target=run, daemon=True).start()
 
     # ---- FFmpeg setup --------------------------------------------------
     def _check_ffmpeg(self):
