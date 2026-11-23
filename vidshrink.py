@@ -28,7 +28,7 @@ from tkinter import ttk, filedialog, messagebox
 from tkinter.scrolledtext import ScrolledText
 
 APP_NAME = "VidShrink"
-VERSION = "1.0.0"  # bump this, then push a matching tag (v1.0.1) to publish an update
+VERSION = "1.0.0"  # bump this and push to main to publish an update to all users
 GITHUB_REPO = "unknownleaves/vidshrink"  # updates are published as GitHub Releases here
 RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 IS_WIN = os.name == "nt"

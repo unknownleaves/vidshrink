@@ -69,12 +69,9 @@ The icon source is `vidshrink.svg`. `vidshrink.ico` contains all the Windows siz
 
 ## Publishing an update (for the maintainer)
 
-1. Make your changes and set the new version at the top of `vidshrink.py`, e.g. `VERSION = "1.0.1"`.
-2. Commit and push, then tag the release with the *same* number:
-   ```
-   git tag v1.0.1
-   git push origin v1.0.1
-   ```
-3. GitHub Actions (`.github/workflows/release.yml`) builds `VidShrink.exe` on Windows, packages `VidShrink-source.zip` and `SHA256SUMS.txt`, and publishes the release with auto-generated notes. You can edit the release text on GitHub afterwards: it's what users see under "What's new".
+1. Make your changes, and set a higher version at the top of `vidshrink.py`, e.g. `VERSION = "1.0.1"`.
+2. Commit and push to `main`.
 
-Everyone running VidShrink is offered the update the next time they open it. The build stops with an error if the tag and `VERSION` don't match. The repository must stay **public** for the update check to work.
+That's it. GitHub Actions (`.github/workflows/release.yml`) notices the new version, builds `VidShrink.exe` on Windows, packages `VidShrink-source.zip` and `SHA256SUMS.txt`, and publishes the release **v1.0.1** with auto-generated notes. Pushes that don't change `VERSION` don't publish anything. You can edit the release text on GitHub afterwards: it's what users see under "What's new". You can also start it by hand from the **Actions** tab (**Release → Run workflow**).
+
+Everyone running VidShrink is offered the update the next time they open it. The repository must stay **public** for the update check to work.
