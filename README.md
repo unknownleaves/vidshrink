@@ -14,13 +14,19 @@ Shrinks videos to a size you choose (for example **1 GB → 500 MB**) while keep
 - Downloads FFmpeg automatically on first run
 - Updates itself: new versions published here are offered in the app automatically
 
-## Download
+## Install
 
-**Easiest:** go to [**Releases**](https://github.com/unknownleaves/vidshrink/releases/latest), download **`VidShrink.exe`**, put it in a folder you own (e.g. Documents\\VidShrink) and run it. No Python needed.
+Open **PowerShell** (press Start, type `powershell`, press Enter), paste this and press Enter:
 
-> Windows SmartScreen may warn about an unrecognised app the first time. Click **More info → Run anyway**.
+```powershell
+irm https://raw.githubusercontent.com/unknownleaves/vidshrink/main/install.ps1 | iex
+```
 
-**From source:** download **`VidShrink-source.zip`** from the same page (or **Code → Download ZIP**), unzip it and follow the quick start below.
+It downloads the latest VidShrink, checks the download is genuine, installs it to your user folder (no admin needed), adds Start menu and Desktop shortcuts, and opens the app. Running the same command again updates or repairs the install. To uninstall, go to **Settings → Apps → Installed apps → VidShrink → Uninstall**.
+
+**Manual download:** grab **`VidShrink.exe`** from [**Releases**](https://github.com/unknownleaves/vidshrink/releases/latest) and run it from a folder you own (e.g. Documents). Windows SmartScreen may warn about an unrecognised app the first time. Click **More info → Run anyway**.
+
+**From source:** download **`VidShrink-source.zip`** from the same page, unzip it and follow the quick start below.
 
 ## Quick start (source version)
 

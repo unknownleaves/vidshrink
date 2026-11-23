@@ -1204,6 +1204,14 @@ def main():
             ctypes.windll.shcore.SetProcessDpiAwareness(1)
         except Exception:  # noqa: BLE001
             pass
+        if getattr(sys, "frozen", False):
+            try:  # keep the version in Settings > Apps current after self-updates (set by install.ps1)
+                import winreg
+                key_path = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\VidShrink"
+                with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE) as k:
+                    winreg.SetValueEx(k, "DisplayVersion", 0, winreg.REG_SZ, VERSION)
+            except OSError:
+                pass
         try:  # show VidShrink's own icon in the taskbar instead of Python's
             import ctypes
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(f"{APP_NAME}.VideoCompressor")
