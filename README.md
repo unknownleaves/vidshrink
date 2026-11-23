@@ -11,6 +11,7 @@ Shrinks videos to a size you choose (for example **1 GB → 500 MB**) while keep
 - Two-pass H.264 / H.265 (HEVC) encoding for the best quality at a given size
 - Batch queue: add multiple files or a whole folder
 - Optional downscaling (4K → 1080p, etc.) and adjustable audio bitrate
+- Uses your graphics card: GPU decoding, GPU encoding, or CPU and GPU in parallel (NVIDIA, AMD, Intel)
 - Downloads FFmpeg automatically on first run
 - Updates itself: new versions published here are offered in the app automatically
 
@@ -60,6 +61,8 @@ The icon source is `vidshrink.svg`. `vidshrink.ico` contains all the Windows siz
 | **Constant quality** | Ignores size and keeps a fixed visual quality (23 = great, 18 = visually lossless). Gives the smallest file for a given look. |
 | **Codec** | **H.264** plays everywhere. **H.265/HEVC** gives noticeably better quality at the same size (or the same quality ~30–40% smaller). It plays on Windows 10/11, phones, modern TVs, YouTube and so on. |
 | **Speed / quality** | Slower presets squeeze out more quality at the same size. *Balanced* is a good default; use *High quality* for important videos. |
+| **Encoder** | **Auto** (recommended): the CPU encodes for the best quality, while your graphics card (GPU) decodes the original to speed things up. **GPU – fastest**: your graphics card does the encoding too. Often 5–10× faster, with slightly lower quality at the same size. **CPU only**: no GPU at all. |
+| **Fast batch** | With several files queued, the CPU and the GPU each compress a file at the same time, so the batch finishes sooner. Files done on the GPU are slightly lower quality. |
 | **Resolution** | Downscaling (e.g. 4K → 1080p) is the best way to keep things looking sharp when you need a *much* smaller file. |
 | **Audio** | 128 kbps AAC sounds good for most videos. 192 kbps is better for music. |
 
@@ -69,6 +72,7 @@ The icon source is `vidshrink.svg`. `vidshrink.ico` contains all the Windows siz
 - Double-click a finished file in the list to show it in Explorer.
 
 ## Notes
+- VidShrink detects NVIDIA (NVENC), AMD (AMF) and Intel (Quick Sync) graphics automatically and shows what it found under the Encoder setting. If the GPU can't handle a file, it switches to the CPU by itself.
 - Output is always `.mp4` with the first video and audio track. Subtitles and extra audio tracks aren't kept.
 - HDR videos are converted to standard (SDR-range 8-bit) output.
 - FFmpeg is stored in `%LOCALAPPDATA%\VidShrink\bin`. To use your own copy instead, put `ffmpeg.exe` and `ffprobe.exe` next to `vidshrink.py` or `VidShrink.exe`, or add them to your PATH.

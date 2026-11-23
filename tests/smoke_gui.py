@@ -133,6 +133,9 @@ def step():
             print("  ok cancel:", states)
             phase("done")
             print("ALL GUI SMOKE TESTS PASSED")
+            print(f"::notice::GUI smoke test passed in {time.time() - st['t0']:.0f}s: parallel CPU+GPU batch "
+                  f"(GPU fell back to CPU), GPU-mode H.265 batch, cancel. Detected GPU on runner: "
+                  f"{v.detect_gpu(ff)}")
             app.destroy()
             return
     except SystemExit:
