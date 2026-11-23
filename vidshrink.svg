@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#262A5C"/><stop offset="1" stop-color="#0D0F26"/></linearGradient>
+  <radialGradient id="glow" cx="0.5" cy="0.52" r="0.5"><stop offset="0" stop-color="#7C5CFF" stop-opacity="0.75"/><stop offset="1" stop-color="#7C5CFF" stop-opacity="0"/></radialGradient>
+  <linearGradient id="card" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#22D3EE"/><stop offset="0.5" stop-color="#7C5CFF"/><stop offset="1" stop-color="#F0459B"/></linearGradient>
+  <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity="0.35"/><stop offset="0.45" stop-color="#fff" stop-opacity="0"/></linearGradient>
+  <linearGradient id="arrow" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#C9D2FF"/></linearGradient>
+  <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity="0.28"/><stop offset="0.3" stop-color="#fff" stop-opacity="0"/></linearGradient>
+  <filter id="shadow" x="-30%" y="-30%" width="160%" height="170%"><feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#05061A" flood-opacity="0.7"/></filter>
+</defs>
+<rect x="6" y="6" width="244" height="244" rx="58" fill="url(#bg)"/>
+<rect x="6" y="6" width="244" height="244" rx="58" fill="url(#glow)"/>
+<rect x="7.5" y="7.5" width="241" height="241" rx="56.5" fill="none" stroke="url(#rim)" stroke-width="3"/>
+<path d="M34 34 L66 66 M66 44 L66 66 L44 66" fill="none" stroke="url(#arrow)" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"/><path d="M222 34 L190 66 M190 44 L190 66 L212 66" fill="none" stroke="url(#arrow)" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"/><path d="M34 222 L66 190 M66 212 L66 190 L44 190" fill="none" stroke="url(#arrow)" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"/><path d="M222 222 L190 190 M190 212 L190 190 L212 190" fill="none" stroke="url(#arrow)" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"/>
+<g filter="url(#shadow)"><rect x="78" y="84" width="100" height="88" rx="22" fill="url(#card)"/></g>
+<rect x="78" y="84" width="100" height="88" rx="22" fill="url(#sheen)"/>
+<path d="M112.7 105.1 L152.7 128.0 L112.7 150.9 Z" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="6.4" stroke-linejoin="round"/>
+</svg>
