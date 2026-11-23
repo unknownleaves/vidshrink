@@ -18,7 +18,7 @@ import zipfile
 
 
 APP_NAME = "VidShrink"
-VERSION = "1.1.0"  # bump this and push to main to publish an update to all users
+VERSION = "1.2.0"  # bump this and push to main to publish an update to all users
 GITHUB_REPO = "unknownleaves/vidshrink"  # updates are published as GitHub Releases here
 RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 IS_WIN = os.name == "nt"
