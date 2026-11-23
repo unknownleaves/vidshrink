@@ -28,7 +28,7 @@ from tkinter import ttk, filedialog, messagebox
 from tkinter.scrolledtext import ScrolledText
 
 APP_NAME = "VidShrink"
-VERSION = "1.0.0"  # bump this and push to main to publish an update to all users
+VERSION = "1.0.1"  # bump this and push to main to publish an update to all users
 GITHUB_REPO = "unknownleaves/vidshrink"  # updates are published as GitHub Releases here
 RELEASES_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 IS_WIN = os.name == "nt"
@@ -218,6 +218,8 @@ def find_tool(name):
 def fmt_size(n):
     if n is None:
         return "-"
+    if n >= 1024 * 1024 * MB:
+        return f"{n / (1024 * 1024 * MB):.2f} TB"
     if n >= 1024 * MB:
         return f"{n / (1024 * MB):.2f} GB"
     if n >= MB:
@@ -682,7 +684,8 @@ class App(tk.Tk):
     # ---- state ---------------------------------------------------------
     def _make_vars(self):
         self.mode = tk.StringVar(value="size")
-        self.size_mb = tk.StringVar(value="500")
+        self.size_mb = tk.StringVar(value="500")   # the number typed in the target box
+        self.size_unit = tk.StringVar(value="MB")
         self.percent = tk.StringVar(value="50")
         self.crf = tk.IntVar(value=23)
         self.codec = tk.StringVar(value=list(CODECS)[0])
@@ -690,13 +693,15 @@ class App(tk.Tk):
         self.res = tk.StringVar(value="Keep original")
         self.audio = tk.StringVar(value="128 kbps")
         self.outdir = tk.StringVar(value="")
-        for v in (self.size_mb, self.percent, self.mode):
+        for v in (self.size_mb, self.size_unit, self.percent, self.mode):
             v.trace_add("write", lambda *_: self._refresh_estimates())
         self.mode.trace_add("write", lambda *_: self._update_mode())
 
     def settings(self):
-        try:
-            size_mb = float(self.size_mb.get())
+        try:  # no upper limit: any size works, in MB or GB
+            size_mb = float(self.size_mb.get().replace(",", "").strip())
+            if self.size_unit.get() == "GB":
+                size_mb *= 1024
         except ValueError:
             size_mb = 0
         try:
@@ -760,12 +765,16 @@ class App(tk.Tk):
         modes.grid(row=0, column=1, columnspan=5, sticky="w", pady=(0, 6))
         r1 = ttk.Radiobutton(modes, text="Target size", variable=self.mode, value="size")
         r1.pack(side="left")
-        self.size_spin = ttk.Spinbox(modes, from_=1, to=100000, increment=50, width=8, textvariable=self.size_mb)
+        self.size_spin = ttk.Spinbox(modes, from_=1, to=10 ** 12, increment=50, width=9, textvariable=self.size_mb)
         self.size_spin.pack(side="left", padx=(4, 2))
-        ttk.Label(modes, text="MB").pack(side="left", padx=(0, 18))
+        self.unit_combo = ttk.Combobox(modes, textvariable=self.size_unit, values=("MB", "GB"),
+                                       state="readonly", width=4)
+        self.unit_combo.pack(side="left", padx=(0, 18))
+        self.unit_combo.bind("<<ComboboxSelected>>", lambda e: self.size_spin.configure(
+            increment=1 if self.size_unit.get() == "GB" else 50))
         r2 = ttk.Radiobutton(modes, text="Percent of original", variable=self.mode, value="percent")
         r2.pack(side="left")
-        self.pct_spin = ttk.Spinbox(modes, from_=5, to=95, increment=5, width=5, textvariable=self.percent)
+        self.pct_spin = ttk.Spinbox(modes, from_=1, to=99, increment=5, width=5, textvariable=self.percent)
         self.pct_spin.pack(side="left", padx=(4, 2))
         ttk.Label(modes, text="%").pack(side="left", padx=(0, 18))
         r3 = ttk.Radiobutton(modes, text="Constant quality", variable=self.mode, value="quality")
@@ -777,7 +786,7 @@ class App(tk.Tk):
         self.crf_label = ttk.Label(modes, width=22)
         self.crf_label.pack(side="left")
         self._crf_text()
-        self.setting_widgets += [r1, r2, r3, self.size_spin, self.pct_spin, self.crf_scale]
+        self.setting_widgets += [r1, r2, r3, self.size_spin, self.unit_combo, self.pct_spin, self.crf_scale]
 
         def combo(row, col, label, var, values, width=30):
             ttk.Label(sf, text=label).grid(row=row, column=col, sticky="w", padx=(0 if col == 0 else 20, 6), pady=3)
@@ -838,6 +847,7 @@ class App(tk.Tk):
         if self.worker:
             return
         self.size_spin.configure(state="normal" if m == "size" else "disabled")
+        self.unit_combo.configure(state="readonly" if m == "size" else "disabled")
         self.pct_spin.configure(state="normal" if m == "percent" else "disabled")
         self.crf_scale.state(["!disabled"] if m == "quality" else ["disabled"])
 
