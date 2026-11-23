@@ -207,6 +207,8 @@ def step():
             phase("dialog")
         elif ph == "dialog" and since() > 1:
             shot("6-update-dialog", win.update_dialog)
+            from PySide6.QtWidgets import QScrollArea
+            shot("7-settings-panel", win.findChild(QScrollArea, "side").widget())
             win.update_dialog.reject()
             phase("done")
             print("ALL GUI SMOKE TESTS PASSED")

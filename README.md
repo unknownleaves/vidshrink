@@ -9,7 +9,8 @@ Shrinks videos to a size you choose (for example **1 GB → 500 MB**) while keep
 **Features**
 - Target size (MB), percent of the original, or constant-quality mode
 - Two-pass H.264 / H.265 (HEVC) encoding for the best quality at a given size
-- Batch queue: add multiple files or a whole folder
+- Batch queue with thumbnails: drag and drop files or whole folders, pause and resume, time left
+- Dark, modern interface (Qt) that remembers your settings
 - Optional downscaling (4K → 1080p, etc.) and adjustable audio bitrate
 - Uses your graphics card: GPU decoding, GPU encoding, or CPU and GPU in parallel (NVIDIA, AMD, Intel)
 - Downloads FFmpeg automatically on first run
@@ -31,7 +32,7 @@ It downloads the latest VidShrink, checks the download is genuine, installs it t
 
 ## Quick start (source version)
 
-1. Install **Python 3** from https://www.python.org/downloads/ (during setup, tick **"Add python.exe to PATH"**).
+1. Install **Python 3.9 or newer** from https://www.python.org/downloads/ (during setup, tick **"Add python.exe to PATH"**). The first launch installs the interface library (PySide6-Essentials, about 80 MB) automatically.
 2. Double-click **`Start VidShrink.bat`**.
 3. On first launch, VidShrink offers to download **FFmpeg**, the free encoding engine it uses (about 100 MB, one time only). Click **Yes**.
 4. Click **Add Videos…**, choose **Target size = 500 MB** (or any size), then click **▶ Start**.
@@ -69,7 +70,9 @@ The icon source is `vidshrink.svg`. `vidshrink.ico` contains all the Windows siz
 ### Tips for keeping quality
 - Halving a file (1 GB → 500 MB) with H.264 usually looks practically identical to the original, because most camera and screen recordings are encoded very inefficiently.
 - For heavy shrinking (to 20–30% or less), switch to **H.265** and/or lower the **Resolution**. The log suggests this when a target is very tight.
-- Double-click a finished file in the list to show it in Explorer.
+- Double-click a finished file in the list to show it in Explorer, or right-click it for more options. A file that failed shows the reason on right-click.
+- **Pause** stops the encoding completely (no CPU or GPU use) until you click **Resume**.
+- Click **Log** at the top to see exactly what VidShrink did, which helps when reporting a problem.
 
 ## Notes
 - VidShrink detects NVIDIA (NVENC), AMD (AMF) and Intel (Quick Sync) graphics automatically and shows what it found under the Encoder setting. If the GPU can't handle a file, it switches to the CPU by itself.
@@ -79,9 +82,18 @@ The icon source is `vidshrink.svg`. `vidshrink.ico` contains all the Windows siz
 
 ## Publishing an update (for the maintainer)
 
-1. Make your changes, and set a higher version at the top of `vidshrink.py`, e.g. `VERSION = "1.0.1"`.
+1. Make your changes, and set a higher version at the top of `vidshrink_core.py`, e.g. `VERSION = "1.2.1"`.
 2. Commit and push to `main`.
 
-That's it. GitHub Actions (`.github/workflows/release.yml`) notices the new version, builds `VidShrink.exe` on Windows, packages `VidShrink-source.zip` and `SHA256SUMS.txt`, and publishes the release **v1.0.1** with auto-generated notes. Pushes that don't change `VERSION` don't publish anything. You can edit the release text on GitHub afterwards: it's what users see under "What's new". You can also start it by hand from the **Actions** tab (**Release → Run workflow**).
+That's it. GitHub Actions (`.github/workflows/release.yml`) tests the app on Windows by driving the real window, saves screenshots to the `ci-screenshots` branch, builds `VidShrink.exe` and checks that it starts. If all of that passes and the version is new, it packages `VidShrink-source.zip` and `SHA256SUMS.txt` and publishes the release **v1.2.1** with auto-generated notes. A failed test means nothing is published. Pushes that don't change `VERSION` don't publish anything. You can edit the release text on GitHub afterwards: it's what users see under "What's new". You can also start it by hand from the **Actions** tab (**Test & Release → Run workflow**).
 
 Everyone running VidShrink is offered the update the next time they open it. The repository must stay **public** for the update check to work.
+
+## Project layout
+
+| File | What it is |
+|---|---|
+| `vidshrink.py` | The app window (PySide6 / Qt) |
+| `vidshrink_core.py` | The engine: probing, CPU/GPU encoding, FFmpeg setup, self-updates. `VERSION` lives here. |
+| `tests/smoke_gui.py` | The Windows UI test the release workflow runs |
+| `install.ps1` | The one-line installer |

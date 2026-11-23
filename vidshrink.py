@@ -62,14 +62,16 @@ def _ensure_pyside():
 
 _ensure_pyside()
 
-from PySide6.QtCore import QPointF, QRectF, QSettings, QSize, Qt, QTimer, QUrl, Signal  # noqa: E402
+from PySide6.QtCore import (QPointF, QRectF, QRegularExpression, QSettings, QSize, Qt, QTimer, QUrl,  # noqa: E402
+                            Signal)
 from PySide6.QtGui import (QAction, QColor, QDesktopServices, QFont, QIcon, QImage, QKeySequence,  # noqa: E402
-                           QPainter, QPainterPath, QPen, QPixmap, QPolygonF, QShortcut)
+                           QPainter, QPainterPath, QPen, QPixmap, QPolygonF, QRegularExpressionValidator,
+                           QShortcut)
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox,  # noqa: E402
-                               QDialog, QDoubleSpinBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
+                               QDialog, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
                                QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu,
                                QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea,
-                               QSizePolicy, QSlider, QSpinBox, QStackedWidget, QTextBrowser, QVBoxLayout,
+                               QSizePolicy, QSlider, QStackedWidget, QTextBrowser, QVBoxLayout,
                                QWidget)
 
 from vidshrink_core import (APP_NAME, IS_WIN, VERSION, VIDEO_EXTS, Cancelled, Encoder,  # noqa: E402
@@ -133,14 +135,11 @@ QPushButton#card {{ min-height: 50px; padding: 0; text-align: left; background: 
                     border: 1px solid {C['line2']}; border-radius: 8px; }}
 QPushButton#card:hover {{ border-color: #3D4380; }}
 QPushButton#card:checked {{ background: {C['sel_bg']}; border: 2px solid {C['sel']}; }}
-QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{ min-height: 38px; padding: 0 10px; background: {C['input']};
+QLineEdit, QComboBox {{ min-height: 38px; padding: 0 10px; background: {C['input']};
     border: 1px solid {C['line2']}; border-radius: 8px; selection-background-color: {C['accent']}; }}
-QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {{ border-color: {C['sel']}; }}
-QSpinBox QLineEdit, QDoubleSpinBox QLineEdit, QComboBox QLineEdit {{ min-height: 0; padding: 0; border: 0;
-    background: transparent; }}
-QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QComboBox:disabled {{ color: #8E93B8;
-    border-color: #23274D; }}
-QSpinBox#big, QDoubleSpinBox#big {{ font-size: 16px; font-weight: 600; }}
+QLineEdit:focus, QComboBox:focus {{ border-color: {C['sel']}; }}
+QLineEdit:disabled, QComboBox:disabled {{ color: #8E93B8; border-color: #23274D; }}
+QLineEdit#big {{ font-size: 16px; font-weight: 600; }}
 QComboBox::drop-down {{ border: 0; width: 26px; }}
 QComboBox QAbstractItemView {{ background: {C['panel']}; border: 1px solid {C['line2']};
     selection-background-color: #2A2F63; outline: 0; padding: 4px; }}
@@ -360,6 +359,29 @@ class ElideLabel(QLabel):
 
     def _elide(self):
         self.setText(self.fontMetrics().elidedText(self._full, Qt.TextElideMode.ElideRight, max(self.width(), 20)))
+
+
+class NumberEdit(QLineEdit):
+    """A text box for numbers (accepts 1.5 or 1,5), with value()/setValue() like a spin box."""
+    valueChanged = Signal(float)
+
+    def __init__(self, decimals=0, maximum_digits=12):
+        super().__init__()
+        self.decimals = decimals
+        pattern = rf"\d{{0,{maximum_digits}}}" + (rf"([.,]\d{{0,{decimals}}})?" if decimals else "")
+        self.setValidator(QRegularExpressionValidator(QRegularExpression(pattern), self))
+        self.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.textChanged.connect(lambda _: self.valueChanged.emit(self.value()))
+
+    def value(self):
+        try:
+            return float(self.text().replace(",", ".") or 0)
+        except ValueError:
+            return 0.0
+
+    def setValue(self, v):
+        v = float(v)
+        self.setText(str(int(v)) if v == int(v) or not self.decimals else f"{v:.{self.decimals}f}")
 
 
 class ThinBar(QProgressBar):
@@ -913,11 +935,8 @@ class MainWindow(QMainWindow):
         hl = QHBoxLayout(pg)
         hl.setContentsMargins(0, 0, 0, 0)
         hl.setSpacing(8)
-        self.size_spin = QDoubleSpinBox()
+        self.size_spin = NumberEdit(decimals=2)  # no upper limit in practice
         self.size_spin.setObjectName("big")
-        self.size_spin.setRange(0.1, 1e9)  # no upper limit in practice
-        self.size_spin.setDecimals(1)
-        self.size_spin.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
         self.size_spin.setValue(500)
         self.size_spin.setFixedWidth(120)
         self.size_spin.setAccessibleName("Target size")
@@ -936,11 +955,9 @@ class MainWindow(QMainWindow):
         hl = QHBoxLayout(pg)
         hl.setContentsMargins(0, 0, 0, 0)
         hl.setSpacing(10)
-        self.pct_spin = QSpinBox()
+        self.pct_spin = NumberEdit(decimals=0, maximum_digits=2)
         self.pct_spin.setObjectName("big")
-        self.pct_spin.setRange(1, 99)
         self.pct_spin.setValue(50)
-        self.pct_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         self.pct_spin.setFixedWidth(72)
         self.pct_spin.setAccessibleName("Percent of original")
         self.pct_spin.valueChanged.connect(self._refresh_targets)
@@ -1355,6 +1372,8 @@ class MainWindow(QMainWindow):
     def _validate(self, s):
         if s["mode"] == "size" and s["size_mb"] <= 0:
             return "Please enter a target size (e.g. 500 MB)."
+        if s["mode"] == "percent" and not 1 <= s["percent"] <= 99:
+            return "Please enter a percentage between 1 and 99."
         out = self.outdir.text().strip()
         if out and not os.path.isdir(out):
             return f"The folder to save to doesn't exist:\n{out}"
