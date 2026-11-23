@@ -1,13 +1,13 @@
-# Publishes an update whenever VERSION in vidshrink.py changes on main.
-# It builds VidShrink.exe, creates the GitHub Release "vX.Y.Z", and every installed
-# copy of VidShrink then offers to update itself.
-# You can also run it by hand: Actions tab -> Release -> Run workflow.
-name: Release
+# On every push to main: tests the app on Windows (drives the real window through
+# CPU, GPU-fallback, parallel and cancelled batches).
+# If the tests pass and VERSION in vidshrink.py is new, it builds VidShrink.exe and
+# publishes the GitHub Release "vX.Y.Z"; installed copies then offer to update.
+# You can also run it by hand: Actions tab -> Test & Release -> Run workflow.
+name: Test & Release
 
 on:
   push:
     branches: [main]
-    paths: ["vidshrink.py", ".github/workflows/release.yml"]
   workflow_dispatch:
 
 permissions:
@@ -18,7 +18,21 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile check
+        run: python -m py_compile vidshrink.py
+      - name: GUI smoke test
+        run: python tests/smoke_gui.py
+
   release:
+    needs: test
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

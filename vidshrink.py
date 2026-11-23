@@ -178,10 +178,15 @@ RESOLUTIONS = {
     "720p": 720,
     "480p": 480,
 }
+ENGINES = {
+    "Auto – CPU encodes, GPU decodes (best quality)": "auto",
+    "GPU – fastest": "gpu",
+    "CPU only": "cpu",
+}
 AUDIO_RATES = {"64 kbps": 64, "96 kbps": 96, "128 kbps": 128, "160 kbps": 160,
                "192 kbps": 192, "256 kbps": 256}
 
-PROGRESS_LINE = re.compile(r"^[a-z0-9_]+=\S*$")
+PROGRESS_LINE = re.compile(r"^[a-z0-9_]+=")  # "-progress" key=value lines (values may contain spaces)
 
 
 # ----------------------------------------------------------------------------
@@ -482,6 +487,87 @@ class Cancelled(Exception):
     pass
 
 
+def first_line(err):
+    """The first, most specific error line, without FFmpeg's "[encoder @ 0x...]" prefix."""
+    lines = [re.sub(r"^\[[^\]]*@ 0x[0-9a-f]+\]\s*", "", ln).strip() for ln in str(err).splitlines()]
+    lines = [ln for ln in lines if ln]
+    return (lines[0] if lines else "unknown error")[:160]
+
+
+# ----------------------------------------------------------------------------
+# GPU support (NVIDIA NVENC, AMD AMF, Intel Quick Sync)
+# ----------------------------------------------------------------------------
+
+HWDEC = ["-hwaccel", "auto"]  # GPU decoding; FFmpeg falls back to the CPU for formats the GPU can't decode
+
+GPU_VENDORS = (  # checked in this order; the first that works is used
+    ("nvidia", "NVIDIA (NVENC)", "h264_nvenc", "hevc_nvenc"),
+    ("amd", "AMD (AMF)", "h264_amf", "hevc_amf"),
+    ("intel", "Intel (Quick Sync)", "h264_qsv", "hevc_qsv"),
+)
+
+
+def detect_gpu(ffmpeg):
+    """Find a GPU encoder that actually works on this PC by encoding a few test frames.
+    Returns {"vendor", "name", "h264": encoder|None, "h265": encoder|None} or None."""
+    try:
+        listing = subprocess.run([ffmpeg, "-hide_banner", "-encoders"], capture_output=True, text=True,
+                                 encoding="utf-8", errors="replace", creationflags=NO_WINDOW,
+                                 timeout=30).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+    def works(enc):
+        if not re.search(rf"\s{enc}\s", listing):
+            return False
+        try:
+            r = subprocess.run(
+                [ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+                 "color=c=black:s=1280x720:r=30", "-frames:v", "10", "-c:v", enc, "-pix_fmt", "nv12",
+                 "-f", "null", "-"],
+                capture_output=True, stdin=subprocess.DEVNULL, creationflags=NO_WINDOW, timeout=45)
+            return r.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+    for vendor, name, h264, hevc in GPU_VENDORS:
+        ok264, ok265 = works(h264), works(hevc)
+        if ok264 or ok265:
+            return {"vendor": vendor, "name": name,
+                    "h264": h264 if ok264 else None, "h265": hevc if ok265 else None}
+    return None
+
+
+def gpu_video_args(gpu, s, v_k, full):
+    """Encoder settings for the GPU. full=False is a conservative set for older GPUs/drivers."""
+    codec = s["codec"]
+    enc = gpu[codec]
+    level = {"fast": 0, "medium": 1, "slow": 2, "slower": 3}.get(s["preset"], 1)
+    q = s["crf"] + (4 if codec == "h265" else 2)  # roughly matches the CPU quality slider
+    rate = ["-b:v", f"{v_k}k", "-maxrate", f"{int(v_k * 1.5)}k", "-bufsize", f"{v_k * 2}k"] if v_k else []
+    a = ["-c:v", enc, "-pix_fmt", "nv12"]
+    vendor = gpu["vendor"]
+    if vendor == "nvidia":
+        a += ["-preset", ("p4", "p5", "p6", "p7")[level], "-tune", "hq", "-rc", "vbr"]
+        a += rate if v_k else ["-cq", str(q), "-b:v", "0"]
+        if full:
+            a += ["-multipass", "fullres", "-spatial-aq", "1", "-temporal-aq", "1",
+                  "-rc-lookahead", "32", "-bf", "3"]
+    elif vendor == "amd":
+        a += ["-quality", ("speed", "balanced", "quality", "quality")[level]]
+        a += (["-rc", "vbr_peak"] + rate) if v_k else ["-rc", "cqp", "-qp_i", str(q), "-qp_p", str(q)]
+        if full:
+            a += ["-vbaq", "1", "-preanalysis", "1"]
+    else:  # intel
+        a += ["-preset", ("faster", "medium", "slow", "veryslow")[level]]
+        a += rate if v_k else ["-global_quality", str(q)]
+        if full:
+            a += ["-extbrc", "1", "-look_ahead_depth", "40"]
+    if codec == "h265":
+        a += ["-tag:v", "hvc1"]
+    return a
+
+
 # ----------------------------------------------------------------------------
 # Encoding engine
 # ----------------------------------------------------------------------------
@@ -531,8 +617,8 @@ class Encoder:
         if rc != 0:
             raise RuntimeError("\n".join(errors[-8:]) or f"FFmpeg exited with code {rc}")
 
-    def encode(self, src, info, s, outdir, on_progress):
-        """Encode one file. Returns (output_path, output_size) or raises."""
+    def encode(self, src, info, s, outdir, on_progress, engine="cpu", hwdecode=False):
+        """Encode one file on the "cpu" or "gpu" engine. Returns (output_path, output_size) or raises."""
         dur = info["duration"]
         has_audio = info["a_index"] is not None
         a_k = s["audio_kbps"] if has_audio else 0
@@ -578,42 +664,28 @@ class Encoder:
         maps = ["-map", f"0:{info['v_index']}"]
         if has_audio:
             maps += ["-map", f"0:{info['a_index']}"]
-        codec = s["codec"]
-        preset = s["preset"]
-        if codec == "h264":
-            vcodec = ["-c:v", "libx264", "-preset", preset, "-pix_fmt", "yuv420p"]
-        else:
-            vcodec = ["-c:v", "libx265", "-preset", preset, "-pix_fmt", "yuv420p", "-tag:v", "hvc1"]
         audio = ["-c:a", "aac", "-b:a", f"{a_k}k"] if has_audio else ["-an"]
         tail = ["-map_metadata", "0", "-movflags", "+faststart"]
 
         out_path = unique_output_path(src, outdir)
         part_path = os.path.splitext(out_path)[0] + ".partial.mp4"
         workdir = tempfile.mkdtemp(prefix="vidshrink_")  # holds two-pass log files
+        ctx = dict(src=src, dur=dur, maps=maps, vf=vf, audio=audio, tail=tail, v_k=v_k, tgt=tgt,
+                   out=part_path, cwd=workdir, on_progress=on_progress)
+        gpu = s.get("gpu")
         try:
-            if v_k is None:
-                # ---- constant quality (single pass) ----
-                crf = s["crf"] + (5 if codec == "h265" else 0)  # x265 CRF scale is ~5 higher for same look
-                q = ["-crf", str(crf)]
-                if codec == "h265":
-                    q += ["-x265-params", "log-level=error"]
-                self._run(["-i", src] + maps + vf + vcodec + q + audio + tail + [part_path],
-                          workdir, dur, on_progress)
+            if engine == "gpu" and gpu and gpu.get(s["codec"]):
+                try:
+                    self._encode_gpu(ctx, s, gpu)
+                except Cancelled:
+                    raise
+                except RuntimeError as e:
+                    self.log(f"  GPU encoding didn't work ({first_line(e)}) – using the CPU instead.")
+                    self._encode_cpu(ctx, s, hwdecode=True)
             else:
-                # ---- two-pass to hit the target size ----
-                rate = ["-b:v", f"{v_k}k"]
-                if codec == "h264":
-                    p1 = rate + ["-pass", "1", "-passlogfile", "pass"]
-                    p2 = rate + ["-pass", "2", "-passlogfile", "pass"]
-                else:  # relative stats path avoids x265 choking on "C:" colons
-                    p1 = rate + ["-x265-params", "pass=1:stats=pass.log:log-level=error"]
-                    p2 = rate + ["-x265-params", "pass=2:stats=pass.log:log-level=error"]
-                self.log("  Pass 1/2 (analysing)…")
-                self._run(["-i", src] + maps[:2] + vf + vcodec + p1 + ["-an", "-f", "null", os.devnull],
-                          workdir, dur, lambda f: on_progress(0.35 * f))
-                self.log("  Pass 2/2 (encoding)…")
-                self._run(["-i", src] + maps + vf + vcodec + p2 + audio + tail + [part_path],
-                          workdir, dur, lambda f: on_progress(0.35 + 0.65 * f))
+                if engine == "gpu":
+                    self.log("  No usable GPU encoder for this codec – using the CPU instead.")
+                self._encode_cpu(ctx, s, hwdecode=hwdecode or engine == "gpu")
             os.replace(part_path, out_path)
         except BaseException:
             try:
@@ -629,6 +701,85 @@ class Encoder:
         if tgt is not None and size > tgt * 1.03:
             self.log(f"  Note: output is {fmt_size(size)}, slightly over the {fmt_size(tgt)} target.")
         return out_path, size
+
+    def _try_variants(self, variants, run, labels):
+        """Run with each variant in turn until one works (e.g. GPU decoding, then CPU decoding)."""
+        for i, v in enumerate(variants):
+            try:
+                return run(v)
+            except Cancelled:
+                raise
+            except RuntimeError as e:
+                if i == len(variants) - 1:
+                    raise
+                self.log(f"  {labels[i]} didn't work ({first_line(e)}) – retrying with {labels[i + 1]}…")
+
+    def _encode_cpu(self, ctx, s, hwdecode):
+        """x264/x265 on the CPU: best quality per MB. Optionally the GPU decodes the source."""
+        codec, preset = s["codec"], s["preset"]
+        if codec == "h264":
+            vcodec = ["-c:v", "libx264", "-preset", preset, "-pix_fmt", "yuv420p"]
+        else:
+            vcodec = ["-c:v", "libx265", "-preset", preset, "-pix_fmt", "yuv420p", "-tag:v", "hvc1"]
+        src, dur, cwd, v_k = ctx["src"], ctx["dur"], ctx["cwd"], ctx["v_k"]
+        maps, vf, audio, tail, out, on_progress = (ctx[k] for k in ("maps", "vf", "audio", "tail", "out",
+                                                                     "on_progress"))
+
+        def run(hw):
+            inp = hw + ["-i", src]
+            if v_k is None:
+                # ---- constant quality (single pass) ----
+                crf = s["crf"] + (5 if codec == "h265" else 0)  # x265 CRF scale is ~5 higher for same look
+                q = ["-crf", str(crf)]
+                if codec == "h265":
+                    q += ["-x265-params", "log-level=error"]
+                self._run(inp + maps + vf + vcodec + q + audio + tail + [out], cwd, dur, on_progress)
+                return
+            # ---- two-pass to hit the target size ----
+            rate = ["-b:v", f"{v_k}k"]
+            if codec == "h264":
+                p1 = rate + ["-pass", "1", "-passlogfile", "pass"]
+                p2 = rate + ["-pass", "2", "-passlogfile", "pass"]
+            else:  # relative stats path avoids x265 choking on "C:" colons
+                p1 = rate + ["-x265-params", "pass=1:stats=pass.log:log-level=error"]
+                p2 = rate + ["-x265-params", "pass=2:stats=pass.log:log-level=error"]
+            self.log("  Pass 1/2 (analysing)…")
+            self._run(inp + maps[:2] + vf + vcodec + p1 + ["-an", "-f", "null", os.devnull],
+                      cwd, dur, lambda f: on_progress(0.35 * f))
+            self.log("  Pass 2/2 (encoding)…")
+            self._run(inp + maps + vf + vcodec + p2 + audio + tail + [out],
+                      cwd, dur, lambda f: on_progress(0.35 + 0.65 * f))
+
+        if hwdecode:
+            self.log("  CPU encoding, GPU decoding")
+            self._try_variants([HWDEC, []], run, ["GPU decoding", "CPU decoding"])
+        else:
+            self.log("  CPU encoding")
+            run([])
+
+    def _encode_gpu(self, ctx, s, gpu):
+        """Hardware encoder on the GPU: much faster, slightly less quality per MB."""
+        self.log(f"  GPU encoding on {gpu['name']}")
+        tgt, v_k = ctx["tgt"], ctx["v_k"]
+
+        def run(variant, rate=v_k):
+            full, hw = variant
+            args = ((HWDEC if hw else []) + ["-i", ctx["src"]] + ctx["maps"] + ctx["vf"]
+                    + gpu_video_args(gpu, s, rate, full) + ctx["audio"] + ctx["tail"] + [ctx["out"]])
+            self._run(args, ctx["cwd"], ctx["dur"], ctx["on_progress"])
+            return variant
+
+        variant = self._try_variants(
+            [(True, True), (False, True), (False, False)], run,
+            ["tuned GPU settings", "basic GPU settings", "basic GPU settings with CPU decoding"])
+
+        # GPU encoders can't do true two-pass, so correct an overshoot with one more (fast) pass
+        if tgt and v_k:
+            size = os.path.getsize(ctx["out"])
+            if size > tgt * 1.02:
+                new_k = max(int(v_k * tgt / size * 0.97), 60)
+                self.log(f"  GPU result was {fmt_size(size)} – re-encoding at {new_k} kbps to fit the target…")
+                run(variant, new_k)
 
 
 # ----------------------------------------------------------------------------
@@ -654,8 +805,11 @@ class App(tk.Tk):
         self.ffprobe = find_tool("ffprobe")
         self.jobs = {}       # iid -> job dict
         self.msgs = queue.Queue()
-        self.worker = None
-        self.encoder = None
+        self.worker = None      # truthy while compressing
+        self.encoders = []      # one Encoder per lane (CPU and/or GPU)
+        self.gpu = None         # detected GPU encoder info
+        self.gpu_checked = False
+        self.active = {}        # iid -> progress fraction of files being encoded right now
         self.total = 0
         self.completed = 0
 
@@ -693,6 +847,8 @@ class App(tk.Tk):
         self.res = tk.StringVar(value="Keep original")
         self.audio = tk.StringVar(value="128 kbps")
         self.outdir = tk.StringVar(value="")
+        self.engine = tk.StringVar(value=list(ENGINES)[0])
+        self.fast_batch = tk.BooleanVar(value=False)
         for v in (self.size_mb, self.size_unit, self.percent, self.mode):
             v.trace_add("write", lambda *_: self._refresh_estimates())
         self.mode.trace_add("write", lambda *_: self._update_mode())
@@ -717,6 +873,9 @@ class App(tk.Tk):
             "preset": PRESETS[self.preset.get()],
             "height": RESOLUTIONS[self.res.get()],
             "audio_kbps": AUDIO_RATES[self.audio.get()],
+            "engine": ENGINES[self.engine.get()],
+            "fast_batch": bool(self.fast_batch.get()),
+            "gpu": self.gpu,
         }
 
     # ---- layout --------------------------------------------------------
@@ -799,10 +958,19 @@ class App(tk.Tk):
         combo(1, 2, "Speed / quality:", self.preset, PRESETS, 26)
         combo(2, 0, "Resolution:", self.res, RESOLUTIONS)
         combo(2, 2, "Audio:", self.audio, AUDIO_RATES, 26)
+        combo(3, 0, "Encoder:", self.engine, ENGINES, 40)
+        gf = ttk.Frame(sf)
+        gf.grid(row=3, column=2, columnspan=4, sticky="w", padx=(20, 0), pady=3)
+        self.batch_chk = ttk.Checkbutton(gf, text="Fast batch: CPU and GPU each work on a file at once",
+                                         variable=self.fast_batch)
+        self.batch_chk.pack(side="left")
+        self.setting_widgets.append(self.batch_chk)
+        self.gpu_label = ttk.Label(sf, text="GPU: checking…", foreground="#666")
+        self.gpu_label.grid(row=4, column=1, columnspan=5, sticky="w")
 
-        ttk.Label(sf, text="Save to:").grid(row=3, column=0, sticky="w", pady=(6, 0))
+        ttk.Label(sf, text="Save to:").grid(row=5, column=0, sticky="w", pady=(6, 0))
         of = ttk.Frame(sf)
-        of.grid(row=3, column=1, columnspan=5, sticky="we", pady=(6, 0))
+        of.grid(row=5, column=1, columnspan=5, sticky="we", pady=(6, 0))
         self.out_entry = ttk.Entry(of, textvariable=self.outdir, width=60)
         self.out_entry.pack(side="left", fill="x", expand=True)
         b1 = ttk.Button(of, text="Browse…", command=self._pick_outdir)
@@ -811,7 +979,7 @@ class App(tk.Tk):
         b2.pack(side="left")
         self.setting_widgets += [self.out_entry, b1, b2]
         ttk.Label(sf, text="(leave empty to save next to the original as  name_compressed.mp4)",
-                  foreground="#666").grid(row=4, column=1, columnspan=5, sticky="w")
+                  foreground="#666").grid(row=6, column=1, columnspan=5, sticky="w")
 
         # Progress + actions
         pf = ttk.Frame(root)
@@ -850,6 +1018,20 @@ class App(tk.Tk):
         self.unit_combo.configure(state="readonly" if m == "size" else "disabled")
         self.pct_spin.configure(state="normal" if m == "percent" else "disabled")
         self.crf_scale.state(["!disabled"] if m == "quality" else ["disabled"])
+        self.batch_chk.state(["!disabled"] if self.gpu else ["disabled"])
+
+    def _show_active(self):
+        names = [os.path.basename(self.jobs[i]["path"]) for i in self.active if i in self.jobs]
+        if len(names) == 1:
+            self.status.configure(text=f"Compressing {names[0]}")
+        elif names:
+            self.status.configure(text=f"Compressing {len(names)} files at once: " + ", ".join(names))
+
+    def _detect_gpu(self):
+        if not self.ffmpeg or self.gpu_checked:
+            return
+        self.gpu_label.configure(text="GPU: checking…")
+        threading.Thread(target=lambda: self.msgs.put(("gpu", detect_gpu(self.ffmpeg))), daemon=True).start()
 
     # ---- queue management ---------------------------------------------
     def log(self, text):
@@ -963,44 +1145,72 @@ class App(tk.Tk):
             messagebox.showinfo(APP_NAME, "Nothing to do – add some videos first.")
             return
         self.total, self.completed = len(todo), 0
-        self.encoder = Encoder(self.ffmpeg, lambda t: self.msgs.put(("log", t)))
-        self._set_running(True)
-        self.log(f"=== Starting {len(todo)} file(s) ===")
-        self.worker = threading.Thread(target=self._work, args=(todo, s, self.outdir.get().strip()), daemon=True)
-        self.worker.start()
+        self.active = {}
+        outdir = self.outdir.get().strip()
 
-    def _work(self, iids, s, outdir):
+        # Which engines ("lanes") work through the queue
+        gpu_ok = bool(s["gpu"] and s["gpu"].get(s["codec"]))
+        if s["fast_batch"] and gpu_ok and len(todo) > 1:
+            lanes = [("cpu", "[CPU] "), ("gpu", "[GPU] ")]
+        elif s["engine"] == "gpu":
+            lanes = [("gpu", "")]
+        else:
+            lanes = [("cpu", "")]
+        if s["fast_batch"] and not gpu_ok:
+            self.log("Fast batch needs a supported GPU for this codec – running on the CPU only.")
+
+        jobs = queue.Queue()
+        for iid in todo:
+            jobs.put(iid)
+        self.encoders = []
+        self.lanes_left, self.ok_count = len(lanes), 0
+        self._set_running(True)
+        self.worker = True
+        self.log(f"=== Starting {len(todo)} file(s)"
+                 + (" – CPU and GPU in parallel" if len(lanes) > 1 else "") + " ===")
+        for engine, tag in lanes:
+            enc = Encoder(self.ffmpeg, lambda t, tag=tag: self.msgs.put(("log", tag + t)))
+            self.encoders.append(enc)
+            threading.Thread(target=self._work, args=(enc, engine, tag, jobs, s, outdir), daemon=True).start()
+
+    def _work(self, enc, engine, tag, jobs, s, outdir):
         ok = 0
-        for iid in iids:
-            if self.encoder.cancelled:
+        hwdecode = s["engine"] != "cpu"  # Auto/GPU: let the GPU decode the source
+        while not enc.cancelled:
+            try:
+                iid = jobs.get_nowait()
+            except queue.Empty:
                 break
             j = self.jobs.get(iid)
             if not j:
                 continue
-            self.msgs.put(("status", iid, "Encoding… 0%", "running"))
-            self.msgs.put(("log", f"▶ {os.path.basename(j['path'])}  ({fmt_size(j['info']['size'])}, "
+            self.msgs.put(("status", iid, f"{tag}Encoding… 0%", "running"))
+            self.msgs.put(("log", f"{tag}▶ {os.path.basename(j['path'])}  ({fmt_size(j['info']['size'])}, "
                                   f"{fmt_dur(j['info']['duration'])})"))
             try:
-                out, size = self.encoder.encode(
+                out, size = enc.encode(
                     j["path"], j["info"], s, outdir,
-                    lambda f, iid=iid: self.msgs.put(("progress", iid, f)))
+                    lambda f, iid=iid: self.msgs.put(("progress", iid, f, tag)),
+                    engine=engine, hwdecode=hwdecode)
                 saved = 100 - size * 100.0 / j["info"]["size"]
                 self.msgs.put(("finished", iid, out, size, saved))
                 ok += 1
             except Cancelled:
                 self.msgs.put(("status", iid, "Cancelled", "cancelled"))
-                self.msgs.put(("log", "  Cancelled."))
+                self.msgs.put(("log", f"{tag}  Cancelled."))
             except Exception as e:  # noqa: BLE001
                 msg = str(e)
                 state = "skipped" if "skipped" in msg else "failed"
                 self.msgs.put(("status", iid, "Skipped" if state == "skipped" else "Failed", state))
-                self.msgs.put(("log", f"  ✖ {msg}"))
-            self.msgs.put(("step",))
-        self.msgs.put(("all_done", ok, len(iids)))
+                self.msgs.put(("log", f"{tag}  ✖ {msg}"))
+            self.msgs.put(("step", iid))
+        # anything left in the queue after a cancel stays "Ready"
+        self.msgs.put(("lane_done", ok))
 
     def _cancel(self):
-        if self.encoder:
-            self.encoder.cancel()
+        if self.encoders:
+            for enc in self.encoders:
+                enc.cancel()
             self.status.configure(text="Cancelling…")
 
     def _set_running(self, running):
@@ -1045,14 +1255,18 @@ class App(tk.Tk):
                         self.tree.set(iid, "status", text)
                         if state == "running":
                             self.tree.see(iid)
-                            self.status.configure(text=f"Compressing {os.path.basename(self.jobs[iid]['path'])}")
+                            self.active[iid] = 0.0
+                            self._show_active()
                 elif kind == "progress":
-                    _, iid, f = m
-                    self.cur_bar["value"] = f * 1000
-                    self.all_bar["value"] = (self.completed + f) / max(self.total, 1) * 1000
-                    if iid in self.tree.get_children():
-                        self.tree.set(iid, "status", f"Encoding… {f * 100:.0f}%")
-                    self.all_label.configure(text=f"Overall  –  file {min(self.completed + 1, self.total)} of {self.total}")
+                    _, iid, f, tag = m
+                    if iid in self.active:
+                        self.active[iid] = f
+                    if self.active:
+                        self.cur_bar["value"] = sum(self.active.values()) / len(self.active) * 1000
+                    self.all_bar["value"] = (self.completed + sum(self.active.values())) / max(self.total, 1) * 1000
+                    if iid in self.jobs:
+                        self.tree.set(iid, "status", f"{tag}Encoding… {f * 100:.0f}%")
+                    self.all_label.configure(text=f"Overall  –  {self.completed} of {self.total} done")
                 elif kind == "finished":
                     _, iid, out, size, saved = m
                     if iid in self.jobs:
@@ -1061,13 +1275,30 @@ class App(tk.Tk):
                     self.log(f"  ✔ Saved {out}  ({fmt_size(size)})")
                 elif kind == "step":
                     self.completed += 1
-                    self.cur_bar["value"] = 0
+                    self.active.pop(m[1], None)
+                    self._show_active()
+                    self.cur_bar["value"] = (sum(self.active.values()) / len(self.active) * 1000) if self.active else 0
                     self.all_bar["value"] = self.completed / max(self.total, 1) * 1000
                 elif kind == "log":
                     self.log(m[1])
-                elif kind == "all_done":
-                    _, ok, n = m
-                    cancelled = self.encoder and self.encoder.cancelled
+                elif kind == "gpu":
+                    self.gpu, self.gpu_checked = m[1], True
+                    if self.gpu:
+                        codecs = " + ".join(c for c, k in (("H.264", "h264"), ("H.265", "h265")) if self.gpu[k])
+                        self.gpu_label.configure(text=f"GPU: {self.gpu['name']} found ({codecs})")
+                        self.log(f"GPU encoder available: {self.gpu['name']} ({codecs})")
+                    else:
+                        self.gpu_label.configure(text="GPU: no supported GPU encoder found – the CPU will be used")
+                    self._update_mode()
+                elif kind == "lane_done":
+                    self.ok_count += m[1]
+                    self.lanes_left -= 1
+                    if self.lanes_left > 0:
+                        continue
+                    ok, n = self.ok_count, self.total
+                    cancelled = any(e.cancelled for e in self.encoders)
+                    self.active = {}
+                    self.cur_bar["value"] = 0
                     self._set_running(False)
                     self.status.configure(text=f"Finished: {ok} of {n} file(s) compressed."
                                           + ("  (cancelled)" if cancelled else ""))
@@ -1087,6 +1318,7 @@ class App(tk.Tk):
                     if self.ffmpeg and self.ffprobe:
                         self.status.configure(text="FFmpeg installed. Add videos to get started.")
                         self.log(f"FFmpeg installed to {tools_dir()}")
+                        self._detect_gpu()
                     else:
                         self.status.configure(text="FFmpeg download failed.")
                 elif kind == "update_info":
@@ -1179,6 +1411,7 @@ class App(tk.Tk):
     def _check_ffmpeg(self):
         if self.ffmpeg and self.ffprobe:
             self.log(f"Using FFmpeg: {self.ffmpeg}")
+            self._detect_gpu()
             return
         if not IS_WIN:
             messagebox.showerror(APP_NAME, "FFmpeg was not found. Please install ffmpeg and ffprobe.")
@@ -1202,8 +1435,8 @@ class App(tk.Tk):
     def _on_close(self):
         if self.worker and not messagebox.askyesno(APP_NAME, "A compression is running. Stop it and quit?"):
             return
-        if self.encoder:
-            self.encoder.cancel()
+        for enc in self.encoders:
+            enc.cancel()
         self.destroy()
 
 
