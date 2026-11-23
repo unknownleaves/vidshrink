@@ -15,5 +15,5 @@ if errorlevel 1 (
     echo Installing the interface library ^(one time only^)...
     %PY% -m pip install --disable-pip-version-check -r requirements.txt
 )
-where pythonw >nul 2>nul && (start "" pythonw "%~dp0vidshrink.py" ^& exit /b)
+where pythonw >nul 2>nul && (start "" pythonw "%~dp0vidshrink.py" & exit /b)
 start "" pyw -3 "%~dp0vidshrink.py"

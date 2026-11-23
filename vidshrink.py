@@ -136,6 +136,10 @@ QPushButton#card:checked {{ background: {C['sel_bg']}; border: 2px solid {C['sel
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{ min-height: 38px; padding: 0 10px; background: {C['input']};
     border: 1px solid {C['line2']}; border-radius: 8px; selection-background-color: {C['accent']}; }}
 QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {{ border-color: {C['sel']}; }}
+QSpinBox QLineEdit, QDoubleSpinBox QLineEdit, QComboBox QLineEdit {{ min-height: 0; padding: 0; border: 0;
+    background: transparent; }}
+QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QComboBox:disabled {{ color: #8E93B8;
+    border-color: #23274D; }}
 QSpinBox#big, QDoubleSpinBox#big {{ font-size: 16px; font-weight: 600; }}
 QComboBox::drop-down {{ border: 0; width: 26px; }}
 QComboBox QAbstractItemView {{ background: {C['panel']}; border: 1px solid {C['line2']};
@@ -165,23 +169,26 @@ QPlainTextEdit {{ background: {C['input']}; border: 1px solid {C['line2']}; bord
 """
 
 UPDATE_QSS = f"""
-QDialog#update, QDialog#update QWidget {{ background: #FFFFFF; color: #15172E; }}
-QDialog#update * {{ font-family: "Segoe UI Variable Text", "Segoe UI", Inter, sans-serif; font-size: 14px; color: #15172E; }}
-QLabel#updTitle {{ font-size: 20px; font-weight: 700; }}
-QLabel#updSub {{ color: #5B6078; }}
-QLabel#updSection {{ color: #4A4F6A; font-size: 12px; font-weight: 700; letter-spacing: 0.5px; background: #F6F7FB; }}
-QLabel#updSafe {{ color: #146B49; font-size: 12px; }}
-QLabel#updError {{ color: #B42318; font-size: 12px; }}
-QFrame#notesBox, QFrame#notesBox QWidget {{ background: #F6F7FB; border-radius: 10px; }}
-QTextBrowser {{ border: 0; background: #F6F7FB; }}
-QPushButton {{ min-height: 40px; padding: 0 20px; border-radius: 8px; background: #FFFFFF; border: 1px solid #D9DCE8; }}
-QPushButton:hover {{ background: #F4F5FA; }}
-QPushButton#updGo {{ background: {C['accent']}; border: 0; color: #FFFFFF; font-weight: 600; }}
-QPushButton#updGo:hover {{ background: {C['accent_hi']}; }}
-QPushButton:disabled {{ color: #9A9EB5; }}
-QPushButton#updGo:disabled {{ background: #B9B0F2; color: #FFFFFF; }}
-QProgressBar {{ height: 8px; background: #E6E8F0; border: 0; border-radius: 4px; }}
-QProgressBar::chunk {{ background: {C['accent']}; border-radius: 4px; }}
+QDialog#update {{ background: #FFFFFF; }}
+QDialog#update * {{ font-family: "Segoe UI Variable Text", "Segoe UI", Inter, sans-serif; font-size: 14px;
+                    color: #15172E; }}
+QDialog#update QLabel {{ background: transparent; }}
+QDialog#update QLabel#updTitle {{ font-size: 20px; font-weight: 700; }}
+QDialog#update QLabel#updSub {{ color: #5B6078; }}
+QDialog#update QLabel#updSection {{ color: #4A4F6A; font-size: 12px; font-weight: 700; letter-spacing: 0.5px; }}
+QDialog#update QLabel#updSafe {{ color: #146B49; font-size: 12px; }}
+QDialog#update QLabel#updError {{ color: #B42318; font-size: 12px; }}
+QDialog#update QFrame#notesBox {{ background: #F6F7FB; border-radius: 10px; }}
+QDialog#update QTextBrowser {{ background: transparent; border: 0; }}
+QDialog#update QPushButton {{ min-height: 40px; padding: 0 20px; border-radius: 8px; background: #FFFFFF;
+                              border: 1px solid #D9DCE8; }}
+QDialog#update QPushButton:hover {{ background: #F4F5FA; }}
+QDialog#update QPushButton:disabled {{ color: #9A9EB5; }}
+QDialog#update QPushButton#updGo {{ background: {C['accent']}; border: 0; color: #FFFFFF; font-weight: 600; }}
+QDialog#update QPushButton#updGo:hover {{ background: {C['accent_hi']}; }}
+QDialog#update QPushButton#updGo:disabled {{ background: #B9B0F2; color: #FFFFFF; }}
+QDialog#update QProgressBar {{ background: #E6E8F0; border: 0; border-radius: 4px; }}
+QDialog#update QProgressBar::chunk {{ background: {C['accent']}; border-radius: 4px; }}
 """
 
 # Labels shown in the UI -> engine values
@@ -535,7 +542,8 @@ class QueueRow(QWidget):
         chip_box.setFixedWidth(150)
         cb = QHBoxLayout(chip_box)
         cb.setContentsMargins(0, 0, 0, 0)
-        cb.addWidget(self.chip)
+        self.chip.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        cb.addWidget(self.chip, 0, Qt.AlignmentFlag.AlignVCenter)
         cb.addStretch(1)
         lay.addWidget(chip_box)
         self.chip.set_chip("Reading…", "wait")
@@ -758,7 +766,8 @@ class MainWindow(QMainWindow):
         self._load_settings()
         self._refresh_mode()
         self._refresh_targets()
-        self._refresh_footer()
+        self._refresh_count()
+        self.cancel_btn.setEnabled(False)
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._poll)
@@ -824,7 +833,8 @@ class MainWindow(QMainWindow):
         top.setSpacing(12)
         top.addWidget(label("Queue", "h1"))
         self.count_pill = label("", "pill")
-        top.addWidget(self.count_pill)
+        self.count_pill.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        top.addWidget(self.count_pill, 0, Qt.AlignmentFlag.AlignVCenter)
         top.addStretch(1)
         add = set_kind(QPushButton(" Add videos"), "primary")
         add.setIcon(QIcon(make_icon("plus", "#FFFFFF", 16, 2.4)))
